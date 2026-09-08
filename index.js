@@ -10,10 +10,7 @@ const nodemailer = require('nodemailer');
 const app = express();
 const port = Number(process.env.PORT) || 3000;
 const mongoUri = process.env.MONGODB_URI;
-
-if (!mongoUri) {
-    throw new Error('MONGODB_URI is not configured');
-}
+let databaseConnection;
 
 app.use(cors());
 app.use(express.json());
@@ -22,12 +19,25 @@ app.get('/health', (req, res) => {
     res.status(200).json({ status: 'ok' });
 });
 
-mongoose.connect(mongoUri).then(() => {
-    console.log("Connected to MongoDB");
-})
-    .catch((err) => {
-        console.log("Error connecting to MongoDB", err);
-    });
+async function connectDatabase() {
+    if (!mongoUri) {
+        throw new Error('MONGODB_URI is not configured');
+    }
+
+    if (!databaseConnection) {
+        databaseConnection = mongoose.connect(mongoUri)
+            .then(() => {
+                console.log("Connected to MongoDB");
+                return mongoose.connection;
+            })
+            .catch((error) => {
+                databaseConnection = undefined;
+                throw error;
+            });
+    }
+
+    return databaseConnection;
+}
 
 const credential = mongoose.model("passkey", {}, "bulkmail")
 
@@ -48,7 +58,7 @@ app.post("/sendmail", (req, res) => {
     console.log("Recipients to send:", emailList);
     
 
-    credential.findOne().then((data) => {
+    connectDatabase().then(() => credential.findOne()).then((data) => {
         if (!data) {
             console.error("No email credentials found in MongoDB");
             return res.status(500).send(false);
@@ -88,7 +98,6 @@ app.post("/sendmail", (req, res) => {
                 res.send(false)
             })
 
-        console.log(data.toJSON())
     }).catch((err) => {
         console.error("Database lookup failed:", err);
         res.status(500).send(false);
@@ -99,8 +108,13 @@ app.post("/sendmail", (req, res) => {
 
 
 if (require.main === module) {
-    app.listen(port, () => {
-        console.log(`Server is running on port ${port}`);
+    connectDatabase().then(() => {
+        app.listen(port, () => {
+            console.log(`Server is running on port ${port}`);
+        });
+    }).catch((error) => {
+        console.error("Failed to start server:", error.message);
+        process.exit(1);
     });
 }
 
